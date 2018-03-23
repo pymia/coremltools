@@ -12,7 +12,7 @@ import json as _json
 import os as _os
 import numpy as _np
 from ._infer_shapes_nn_mlmodel import infer_shapes as _infer_shapes
-from coremltools.proto import NeuralNetwork_pb2 as _NeuralNetwork_pb2
+from ...coremltools.proto import NeuralNetwork_pb2 as _NeuralNetwork_pb2
 
 
 def _calculate_edges(cy_nodes, cy_edges, shape_dict=None):

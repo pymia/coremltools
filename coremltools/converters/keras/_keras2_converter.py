@@ -8,12 +8,114 @@ from ...models import MLModel as _MLModel
 from ...models.utils import save_spec as _save_spec
 
 from ..._deps import HAS_KERAS2_TF as _HAS_KERAS2_TF
+# ---
+import tensorflow as tf
+import numpy as np
+ANCHORS = '2.29660,0.99852,8.83983,8.99741,5.47747,8.39669,4.62320,9.71228,1.69568,5.14920'
+ANCHORS = [float(ANCHORS.strip()) for ANCHORS in ANCHORS.split(',')]
+BOX = 5
+GRID_H, GRID_W = 13, 13
+NORM_H, NORM_W = 416, 416
+SCALE_NOOB, SCALE_CONF, SCALE_COOR, SCALE_PROB = 0.5, 5.0, 5.0, 1.0
+CLASS = 2
 
+
+def custom_loss(y_true, y_pred):
+    # Adjust prediction
+    # adjust x and y
+    pred_box_xy = tf.sigmoid(y_pred[:, :, :, :, :2])
+
+    # adjust w and h
+    pred_box_wh = tf.exp(y_pred[:, :, :, :, 2:4]) * \
+        np.reshape(ANCHORS, [1, 1, 1, BOX, 2])
+    pred_box_wh = tf.sqrt(
+        pred_box_wh / np.reshape([float(GRID_W), float(GRID_H)], [1, 1, 1, 1, 2]))
+
+    # adjust confidence
+    pred_box_conf = tf.expand_dims(tf.sigmoid(y_pred[:, :, :, :, 4]), -1)
+
+    # adjust probability
+    pred_box_prob = tf.nn.softmax(y_pred[:, :, :, :, 5:])
+
+    y_pred = tf.concat(
+        [pred_box_xy, pred_box_wh, pred_box_conf, pred_box_prob], 4)
+    print("Y_pred shape: {}".format(y_pred.shape))
+
+    # Adjust ground truth
+    # adjust x and y
+    center_xy = .5 * (y_true[:, :, :, :, 0:2] + y_true[:, :, :, :, 2:4])
+    center_xy = center_xy / \
+        np.reshape([(float(NORM_W) / GRID_W),
+                    (float(NORM_H) / GRID_H)], [1, 1, 1, 1, 2])
+    true_box_xy = center_xy - tf.floor(center_xy)
+
+    # adjust w and h
+    true_box_wh = (y_true[:, :, :, :, 2:4] - y_true[:, :, :, :, 0:2])
+    true_box_wh = tf.sqrt(
+        true_box_wh / np.reshape([float(NORM_W), float(NORM_H)], [1, 1, 1, 1, 2]))
+
+    # adjust confidence
+    pred_tem_wh = tf.pow(pred_box_wh, 2) * \
+        np.reshape([GRID_W, GRID_H], [1, 1, 1, 1, 2])
+    pred_box_area = pred_tem_wh[:, :, :, :, 0] * pred_tem_wh[:, :, :, :, 1]
+    pred_box_ul = pred_box_xy - 0.5 * pred_tem_wh
+    pred_box_bd = pred_box_xy + 0.5 * pred_tem_wh
+
+    true_tem_wh = tf.pow(true_box_wh, 2) * \
+        np.reshape([GRID_W, GRID_H], [1, 1, 1, 1, 2])
+    true_box_area = true_tem_wh[:, :, :, :, 0] * true_tem_wh[:, :, :, :, 1]
+    true_box_ul = true_box_xy - 0.5 * true_tem_wh
+    true_box_bd = true_box_xy + 0.5 * true_tem_wh
+
+    intersect_ul = tf.maximum(pred_box_ul, true_box_ul)
+    intersect_br = tf.minimum(pred_box_bd, true_box_bd)
+    intersect_wh = intersect_br - intersect_ul
+    intersect_wh = tf.maximum(intersect_wh, 0.0)
+    intersect_area = intersect_wh[:, :, :, :, 0] * intersect_wh[:, :, :, :, 1]
+
+    iou = tf.truediv(intersect_area, true_box_area +
+                     pred_box_area - intersect_area)
+    best_box = tf.equal(iou, tf.reduce_max(iou, [3], True))
+    best_box = tf.to_float(best_box)
+    true_box_conf = tf.expand_dims(best_box * y_true[:, :, :, :, 4], -1)
+
+    # adjust confidence
+    true_box_prob = y_true[:, :, :, :, 5:]
+
+    y_true = tf.concat(
+        [true_box_xy, true_box_wh, true_box_conf, true_box_prob], 4)
+    print("Y_true shape: {}".format(y_true.shape))
+    #y_true = tf.Print(y_true, [true_box_wh], message='DEBUG', summarize=30000)
+
+    # Compute the weights
+    weight_coor = tf.concat(4 * [true_box_conf], 4)
+    weight_coor = SCALE_COOR * weight_coor
+
+    weight_conf = SCALE_NOOB * (1. - true_box_conf) + \
+        SCALE_CONF * true_box_conf
+
+    weight_prob = tf.concat(CLASS * [true_box_conf], 4)
+    weight_prob = SCALE_PROB * weight_prob
+
+    weight = tf.concat([weight_coor, weight_conf, weight_prob], 4)
+    print("Weight shape: {}".format(weight.shape))
+
+    # Finalize the loss
+    loss = tf.pow(y_pred - y_true, 2)
+    loss = loss * weight
+    loss = tf.reshape(loss, [-1, GRID_W * GRID_H * BOX * (4 + 1 + CLASS)])
+    loss = tf.reduce_sum(loss, 1)
+    loss = .5 * tf.reduce_mean(loss)
+
+    return loss
+
+
+# ---
 if _HAS_KERAS2_TF:
     import keras as _keras
     from . import _layers2
     from . import _topology2
-    _KERAS_LAYER_REGISTRY  = {
+    _KERAS_LAYER_REGISTRY = {
         _keras.layers.core.Dense: _layers2.convert_dense,
         _keras.layers.core.Activation: _layers2.convert_activation,
         _keras.layers.advanced_activations.LeakyReLU: _layers2.convert_activation,
@@ -23,7 +125,7 @@ if _HAS_KERAS2_TF:
 
         _keras.layers.convolutional.Conv2D: _layers2.convert_convolution,
         _keras.layers.convolutional.Conv2DTranspose: _layers2.convert_convolution,
-        _keras.layers.convolutional.SeparableConv2D: _layers2.convert_separable_convolution, 
+        _keras.layers.convolutional.SeparableConv2D: _layers2.convert_separable_convolution,
         _keras.layers.pooling.AveragePooling2D: _layers2.convert_pooling,
         _keras.layers.pooling.MaxPooling2D: _layers2.convert_pooling,
         _keras.layers.pooling.GlobalAveragePooling2D: _layers2.convert_pooling,
@@ -54,23 +156,23 @@ if _HAS_KERAS2_TF:
         _keras.layers.Maximum: _layers2.convert_merge,
         _keras.layers.Concatenate: _layers2.convert_merge,
         _keras.layers.Dot: _layers2.convert_merge,
-    
-        _keras.layers.core.Flatten: _layers2.convert_flatten,
-        _keras.layers.core.Permute:_layers2.convert_permute,
-        _keras.layers.core.Reshape:_layers2.convert_reshape,
-        _keras.layers.embeddings.Embedding:_layers2.convert_embedding,
-        _keras.layers.core.RepeatVector:_layers2.convert_repeat_vector,
 
-        _keras.engine.topology.InputLayer:_layers2.default_skip,
-        _keras.layers.core.Dropout:_layers2.default_skip,
-        _keras.layers.core.SpatialDropout2D:_layers2.default_skip,
-        _keras.layers.core.SpatialDropout1D:_layers2.default_skip,
-        _keras.layers.wrappers.TimeDistributed:_layers2.default_skip,
-        
-        _keras.applications.mobilenet.DepthwiseConv2D:_layers2.convert_convolution,
+        _keras.layers.core.Flatten: _layers2.convert_flatten,
+        _keras.layers.core.Permute: _layers2.convert_permute,
+        _keras.layers.core.Reshape: _layers2.convert_reshape,
+        _keras.layers.embeddings.Embedding: _layers2.convert_embedding,
+        _keras.layers.core.RepeatVector: _layers2.convert_repeat_vector,
+
+        _keras.engine.topology.InputLayer: _layers2.default_skip,
+        _keras.layers.core.Dropout: _layers2.default_skip,
+        _keras.layers.core.SpatialDropout2D: _layers2.default_skip,
+        _keras.layers.core.SpatialDropout1D: _layers2.default_skip,
+        _keras.layers.wrappers.TimeDistributed: _layers2.default_skip,
+
+        _keras.applications.mobilenet.DepthwiseConv2D: _layers2.convert_convolution,
 
     }
-    
+
 
 def _is_merge_layer(layer):
     if _HAS_KERAS2_TF:
@@ -79,35 +181,39 @@ def _is_merge_layer(layer):
                 return True
     return False
 
+
 def _is_activation_layer(layer):
-    return (isinstance(layer, _keras.layers.core.Activation) or \
-            isinstance(layer, _keras.layers.advanced_activations.LeakyReLU) or \
-            isinstance(layer, _keras.layers.advanced_activations.PReLU) or \
-            isinstance(layer, _keras.layers.advanced_activations.ELU) or \
+    return (isinstance(layer, _keras.layers.core.Activation) or
+            isinstance(layer, _keras.layers.advanced_activations.LeakyReLU) or
+            isinstance(layer, _keras.layers.advanced_activations.PReLU) or
+            isinstance(layer, _keras.layers.advanced_activations.ELU) or
             isinstance(layer, _keras.layers.advanced_activations.ThresholdedReLU))
 
-def _check_unsupported_layers(model, add_custom_layers = False):
+
+def _check_unsupported_layers(model, add_custom_layers=False):
     # When add_custom_layers = True, we just convert all layers not present in
     # registry as custom layer placeholders
     if add_custom_layers:
         return
     for i, layer in enumerate(model.layers):
         if isinstance(layer, _keras.models.Sequential) or isinstance(layer,
-                _keras.models.Model):
+                                                                     _keras.models.Model):
             _check_unsupported_layers(layer)
         else:
             if type(layer) not in _KERAS_LAYER_REGISTRY:
-                raise ValueError("Keras layer '%s' not supported. " % str(type(layer)))
+                raise ValueError(
+                    "Keras layer '%s' not supported. " % str(type(layer)))
             if isinstance(layer, _keras.layers.wrappers.TimeDistributed):
                 if type(layer.layer) not in _KERAS_LAYER_REGISTRY:
-                     raise ValueError(
-                         "Keras layer '%s' not supported. " % str(type(layer.layer)))
+                    raise ValueError(
+                        "Keras layer '%s' not supported. " % str(type(layer.layer)))
             if isinstance(layer, _keras.layers.wrappers.Bidirectional):
                 if not isinstance(layer.layer,  _keras.layers.recurrent.LSTM):
                     raise ValueError(
                         "Keras bi-directional wrapper conversion supports only LSTM layer at this time. ")
 
-def _get_layer_converter_fn(layer, add_custom_layers = False):
+
+def _get_layer_converter_fn(layer, add_custom_layers=False):
     """Get the right converter function for Keras
     """
     layer_type = type(layer)
@@ -121,10 +227,11 @@ def _get_layer_converter_fn(layer, add_custom_layers = False):
     elif add_custom_layers:
         return None
     else:
-        raise TypeError("Keras layer of type %s is not supported." % type(layer))
+        raise TypeError(
+            "Keras layer of type %s is not supported." % type(layer))
 
 
-def _load_keras_model(model_network_path, model_weight_path):
+def _load_keras_model(model_network_path, model_weight_path, custom_objects=None):
     """Load a keras model from disk
 
     Parameters
@@ -149,43 +256,47 @@ def _load_keras_model(model_network_path, model_weight_path):
 
     # Load the model weights
     loaded_model = model_from_json(loaded_model_json)
-    loaded_model.load_weights(model_weight_path)
+    loaded_model.load_weights(model_weight_path, custom_objects)
 
     return loaded_model
 
 
-def _convert(model, 
-            input_names = None, 
-            output_names = None, 
-            image_input_names = None, 
-            is_bgr = False, 
-            red_bias = 0.0, 
-            green_bias = 0.0, 
-            blue_bias = 0.0, 
-            gray_bias = 0.0, 
-            image_scale = 1.0, 
-            class_labels = None, 
-            predicted_feature_name = None,
-            predicted_probabilities_output = '',
-            add_custom_layers = False,
-            custom_conversion_functions = None,
-            custom_objects=None):
-
+def _convert(model,
+             input_names=None,
+             output_names=None,
+             image_input_names=None,
+             is_bgr=False,
+             red_bias=0.0,
+             green_bias=0.0,
+             blue_bias=0.0,
+             gray_bias=0.0,
+             image_scale=1.0,
+             class_labels=None,
+             predicted_feature_name=None,
+             predicted_probabilities_output='',
+             add_custom_layers=False,
+             custom_conversion_functions=None,
+             custom_objects=None):
+    print("_keras2")
     # Check Keras format
     if _keras.backend.image_data_format() == 'channels_first':
         print("Keras image data format 'channels_first' detected. Currently only 'channels_last' is supported. "
-            "Changing to 'channels_last', but your model may not be converted "
-            "converted properly.")
+              "Changing to 'channels_last', but your model may not be converted "
+              "converted properly.")
         _keras.backend.set_image_data_format('channels_last')
-    
+
     if isinstance(model, _string_types):
-        model = _keras.models.load_model(model, custom_objects = custom_objects)
+        print("isinstance_a")
+        model = _keras.models.load_model(
+            model, custom_objects={'custom_loss': custom_loss})
     elif isinstance(model, tuple):
-        model = _load_keras_model(model[0], model[1], custom_objects = custom_objects)
-    
+        print("isinstance_b")
+        model = _load_keras_model(
+            model[0], model[1], custom_objects=custom_objects)
+
     # Check valid versions
     _check_unsupported_layers(model, add_custom_layers)
-    
+
     # Build network graph to represent Keras model
     graph = _topology2.NetGraph(model)
     graph.build()
@@ -193,28 +304,28 @@ def _convert(model,
     # The graph should be finalized before executing this
     graph.generate_blob_names()
     graph.add_recurrent_optionals()
-    
+
     inputs = graph.get_input_layers()
     outputs = graph.get_output_layers()
-    
+
     # check input / output names validity
-    if input_names is not None: 
+    if input_names is not None:
         if isinstance(input_names, _string_types):
             input_names = [input_names]
-    else: 
-        input_names = ['input' + str(i+1) for i in range(len(inputs))]
-    if output_names is not None: 
+    else:
+        input_names = ['input' + str(i + 1) for i in range(len(inputs))]
+    if output_names is not None:
         if isinstance(output_names, _string_types):
             output_names = [output_names]
-    else: 
-        output_names = ['output' + str(i+1) for i in range(len(outputs))]
-    
+    else:
+        output_names = ['output' + str(i + 1) for i in range(len(outputs))]
+
     if image_input_names is not None and isinstance(image_input_names, _string_types):
         image_input_names = [image_input_names]
-    
+
     graph.reset_model_input_names(input_names)
     graph.reset_model_output_names(output_names)
-    
+
     # Keras -> Core ML input dimension dictionary
     # (None, None) -> [1, 1, 1, 1, 1]
     # (None, D) -> [D] or [D, 1, 1, 1, 1]
@@ -231,7 +342,7 @@ def _convert(model,
     else:
         input_dims = [filter(None, model.input_shape)]
         unfiltered_shapes = [model.input_shape]
-            
+
     for idx, dim in enumerate(input_dims):
         unfiltered_shape = unfiltered_shapes[idx]
         dim = list(dim)
@@ -244,17 +355,19 @@ def _convert(model,
                 # Embedding layer's special input (None, D) where D is actually sequence length
                 input_dims[idx] = (1,)
             else:
-                input_dims[idx] = dim # dim is just a number
+                input_dims[idx] = dim  # dim is just a number
         elif len(dim) == 2:  # [Seq, D]
             input_dims[idx] = (dim[1],)
-        elif len(dim) == 3: #H,W,C
+        elif len(dim) == 3:  # H,W,C
             if (len(unfiltered_shape) > 3):
                 # keras uses the reverse notation from us
                 input_dims[idx] = (dim[2], dim[0], dim[1])
-            else: # keras provided fixed batch and sequence length, so the input was (batch, sequence, channel)
+            # keras provided fixed batch and sequence length, so the input was (batch, sequence, channel)
+            else:
                 input_dims[idx] = (dim[2],)
         else:
-            raise ValueError("Input '%s' has input shape of length %d" % (input_names[idx], len(dim)))
+            raise ValueError("Input '%s' has input shape of length %d" % (
+                input_names[idx], len(dim)))
 
     # Retrieve output shapes from model
     if type(model.output_shape) is list:
@@ -287,18 +400,20 @@ def _convert(model,
     input_features = list(zip(input_names, input_types))
     output_features = list(zip(output_names, output_types))
 
-    builder = _NeuralNetworkBuilder(input_features, output_features, mode = mode)
+    builder = _NeuralNetworkBuilder(input_features, output_features, mode=mode)
 
     for iter, layer in enumerate(graph.layer_list):
         keras_layer = graph.keras_layer_map[layer]
         print("%d : %s, %s" % (iter, layer, keras_layer))
         if isinstance(keras_layer, _keras.layers.wrappers.TimeDistributed):
             keras_layer = keras_layer.layer
-        converter_func = _get_layer_converter_fn(keras_layer, add_custom_layers)
+        converter_func = _get_layer_converter_fn(
+            keras_layer, add_custom_layers)
         input_names, output_names = graph.get_layer_blobs(layer)
         # this may be none if we're using custom layers
         if converter_func:
-            converter_func(builder, layer, input_names, output_names, keras_layer)
+            converter_func(builder, layer, input_names,
+                           output_names, keras_layer)
         else:
             if _is_activation_layer(keras_layer):
                 import six
@@ -309,7 +424,8 @@ def _convert(model,
             else:
                 layer_name = type(keras_layer).__name__
             if layer_name in custom_conversion_functions:
-                custom_spec = custom_conversion_functions[layer_name](keras_layer)
+                custom_spec = custom_conversion_functions[layer_name](
+                    keras_layer)
             else:
                 custom_spec = None
 
@@ -325,31 +441,32 @@ def _convert(model,
         if isinstance(classes_in, _string_types):
             import os
             if not os.path.isfile(classes_in):
-                raise ValueError("Path to class labels (%s) does not exist." % classes_in)
+                raise ValueError(
+                    "Path to class labels (%s) does not exist." % classes_in)
             with open(classes_in, 'r') as f:
                 classes = f.read()
             classes = classes.splitlines()
-        elif type(classes_in) is list: # list[int or str]
+        elif type(classes_in) is list:  # list[int or str]
             classes = classes_in
         else:
-            raise ValueError('Class labels must be a list of integers / strings, or a file path')
+            raise ValueError(
+                'Class labels must be a list of integers / strings, or a file path')
 
         if predicted_feature_name is not None:
-            builder.set_class_labels(classes, predicted_feature_name = predicted_feature_name,
-                                     prediction_blob = predicted_probabilities_output)
+            builder.set_class_labels(classes, predicted_feature_name=predicted_feature_name,
+                                     prediction_blob=predicted_probabilities_output)
         else:
             builder.set_class_labels(classes)
 
     # Set pre-processing paramsters
-    builder.set_pre_processing_parameters(image_input_names = image_input_names, 
-                                          is_bgr = is_bgr, 
-                                          red_bias = red_bias, 
-                                          green_bias = green_bias, 
-                                          blue_bias = blue_bias, 
-                                          gray_bias = gray_bias, 
-                                          image_scale = image_scale)
+    builder.set_pre_processing_parameters(image_input_names=image_input_names,
+                                          is_bgr=is_bgr,
+                                          red_bias=red_bias,
+                                          green_bias=green_bias,
+                                          blue_bias=blue_bias,
+                                          gray_bias=gray_bias,
+                                          image_scale=image_scale)
 
     # Return the protobuf spec
     spec = builder.spec
     return spec
-

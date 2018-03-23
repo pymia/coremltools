@@ -6,12 +6,12 @@
 from six import string_types as _string_types
 
 from ...models.neural_network import NeuralNetworkBuilder as _NeuralNetworkBuilder
-from ...proto import FeatureTypes_pb2 as _FeatureTypes_pb2
-from collections import OrderedDict as _OrderedDict
+#from ...proto import FeatureTypes_pb2 as _FeatureTypes_pb2
+#from collections import OrderedDict as _OrderedDict
 from ...models import datatypes
 from ...models import MLModel as _MLModel
 from ...models import _MLMODEL_FULL_PRECISION, _MLMODEL_HALF_PRECISION, _VALID_MLMODEL_PRECISION_TYPES
-from ...models.utils import convert_neural_network_weights_to_fp16 as convert_neural_network_weights_to_fp16
+#from ...models.utils import convert_neural_network_weights_to_fp16 as convert_neural_network_weights_to_fp16
 from ...models.utils import convert_neural_network_spec_weights_to_fp16 as convert_neural_network_spec_weights_to_fp16
 
 from ..._deps import HAS_KERAS_TF as _HAS_KERAS_TF
@@ -21,7 +21,7 @@ if _HAS_KERAS_TF:
     import keras as _keras
     from . import _layers
     from . import _topology
-    _KERAS_LAYER_REGISTRY  = {
+    _KERAS_LAYER_REGISTRY = {
         _keras.layers.core.Dense: _layers.convert_dense,
 
         _keras.layers.core.Activation: _layers.convert_activation,
@@ -60,16 +60,16 @@ if _HAS_KERAS_TF:
         _keras.layers.normalization.BatchNormalization: _layers.convert_batchnorm,
         _keras.engine.topology.Merge: _layers.convert_merge,
         _keras.layers.core.Flatten: _layers.convert_flatten,
-        _keras.layers.core.Permute:_layers.convert_permute,
-        _keras.layers.core.Reshape:_layers.convert_reshape,
-        _keras.layers.embeddings.Embedding:_layers.convert_embedding,
+        _keras.layers.core.Permute: _layers.convert_permute,
+        _keras.layers.core.Reshape: _layers.convert_reshape,
+        _keras.layers.embeddings.Embedding: _layers.convert_embedding,
 
-        _keras.layers.core.RepeatVector:_layers.convert_repeat_vector,
+        _keras.layers.core.RepeatVector: _layers.convert_repeat_vector,
 
-        ## All the layers that can be skipped (merged with conv)
-        _keras.engine.topology.InputLayer:_layers.default_skip,
-        _keras.layers.core.Dropout:_layers.default_skip,
-        _keras.layers.wrappers.TimeDistributed:_layers.default_skip,
+        # All the layers that can be skipped (merged with conv)
+        _keras.engine.topology.InputLayer: _layers.default_skip,
+        _keras.layers.core.Dropout: _layers.default_skip,
+        _keras.layers.wrappers.TimeDistributed: _layers.default_skip,
 
     }
 
@@ -77,28 +77,30 @@ if _HAS_KERAS_TF:
         _keras.layers.core.Dropout,
     ]
 
+
 def _check_unsupported_layers(model):
     for i, layer in enumerate(model.layers):
         if isinstance(layer, _keras.models.Sequential) or isinstance(layer, _keras.models.Model):
             _check_unsupported_layers(layer)
-        else: 
+        else:
             if type(layer) not in _KERAS_LAYER_REGISTRY:
-                 raise ValueError(
-                     "Keras layer '%s' not supported. " % str(type(layer)))
+                raise ValueError(
+                    "Keras layer '%s' not supported. " % str(type(layer)))
             if isinstance(layer, _keras.engine.topology.Merge):
-                if layer.layers is None: 
+                if layer.layers is None:
                     continue
                 for merge_layer in layer.layers:
                     if isinstance(merge_layer, _keras.models.Sequential) or isinstance(merge_layer, _keras.models.Model):
                         _check_unsupported_layers(merge_layer)
             if isinstance(layer, _keras.layers.wrappers.TimeDistributed):
                 if type(layer.layer) not in _KERAS_LAYER_REGISTRY:
-                     raise ValueError(
-                         "Keras layer '%s' not supported. " % str(type(layer.layer)))
+                    raise ValueError(
+                        "Keras layer '%s' not supported. " % str(type(layer.layer)))
             if isinstance(layer, _keras.layers.wrappers.Bidirectional):
                 if not isinstance(layer.layer,  _keras.layers.recurrent.LSTM):
                     raise ValueError(
                         "Keras bi-directional wrapper conversion supports only LSTM layer at this time. ")
+
 
 def _get_layer_converter_fn(layer):
     """Get the right converter function for Keras
@@ -107,7 +109,8 @@ def _get_layer_converter_fn(layer):
     if layer_type in _KERAS_LAYER_REGISTRY:
         return _KERAS_LAYER_REGISTRY[layer_type]
     else:
-        raise TypeError("Keras layer of type %s is not supported." % type(layer))
+        raise TypeError(
+            "Keras layer of type %s is not supported." % type(layer))
 
 
 def _load_keras_model(model_network_path, model_weight_path):
@@ -140,31 +143,34 @@ def _load_keras_model(model_network_path, model_weight_path):
 
     return loaded_model
 
-def _convert(model, 
-            input_names = None, 
-            output_names = None, 
-            image_input_names = None, 
-            is_bgr = False, 
-            red_bias = 0.0, 
-            green_bias = 0.0, 
-            blue_bias = 0.0, 
-            gray_bias = 0.0, 
-            image_scale = 1.0, 
-            class_labels = None, 
-            predicted_feature_name = None,
-            predicted_probabilities_output = '',
-            custom_objects = None):
-    
+
+def _convert(model,
+             input_names=None,
+             output_names=None,
+             image_input_names=None,
+             is_bgr=False,
+             red_bias=0.0,
+             green_bias=0.0,
+             blue_bias=0.0,
+             gray_bias=0.0,
+             image_scale=1.0,
+             class_labels=None,
+             predicted_feature_name=None,
+             predicted_probabilities_output='',
+             custom_objects=None):
+    print("_keras1")
     if not(_HAS_KERAS_TF):
-        raise RuntimeError('keras not found or unsupported version or backend found. keras conversion API is disabled.')
+        raise RuntimeError(
+            'keras not found or unsupported version or backend found. keras conversion API is disabled.')
     if isinstance(model, _string_types):
-        model = _keras.models.load_model(model, custom_objects = custom_objects)
+        model = _keras.models.load_model(model, custom_objects=custom_objects)
     elif isinstance(model, tuple):
-        model = _load_keras_model(model[0], model[1], custom_objects = custom_objects)
-    
+        model = _load_keras_model(
+            model[0], model[1], custom_objects=custom_objects)
+
     # Check valid versions
     _check_unsupported_layers(model)
-    
+
     # Build network graph to represent Keras model
     graph = _topology.NetGraph(model)
     graph.build()
@@ -178,28 +184,28 @@ def _convert(model,
     # The graph should be finalized before executing this
     graph.generate_blob_names()
     graph.add_recurrent_optionals()
-    
+
     inputs = graph.get_input_layers()
     outputs = graph.get_output_layers()
-    
+
     # check input / output names validity
-    if input_names is not None: 
+    if input_names is not None:
         if isinstance(input_names, _string_types):
             input_names = [input_names]
-    else: 
-        input_names = ['input' + str(i+1) for i in range(len(inputs))]
-    if output_names is not None: 
+    else:
+        input_names = ['input' + str(i + 1) for i in range(len(inputs))]
+    if output_names is not None:
         if isinstance(output_names, _string_types):
             output_names = [output_names]
-    else: 
-        output_names = ['output' + str(i+1) for i in range(len(outputs))]
-    
+    else:
+        output_names = ['output' + str(i + 1) for i in range(len(outputs))]
+
     if image_input_names is not None and isinstance(image_input_names, _string_types):
         image_input_names = [image_input_names]
-    
+
     graph.reset_model_input_names(input_names)
     graph.reset_model_output_names(output_names)
-    
+
     # Keras -> Core ML input dimension dictionary
     # (None, None) -> [1, 1, 1, 1, 1]
     # (None, D) -> [D] or [D, 1, 1, 1, 1]
@@ -216,7 +222,7 @@ def _convert(model,
     else:
         input_dims = [list(filter(None, model.input_shape))]
         unfiltered_shapes = [model.input_shape]
-            
+
     for idx, dim in enumerate(input_dims):
         unfiltered_shape = unfiltered_shapes[idx]
         if len(dim) == 0:
@@ -228,17 +234,19 @@ def _convert(model,
                 # Embedding layer's special input (None, D) where D is actually sequence length
                 input_dims[idx] = (1,)
             else:
-                input_dims[idx] = dim # dim is just a number
+                input_dims[idx] = dim  # dim is just a number
         elif len(dim) == 2:  # [Seq, D]
             input_dims[idx] = (dim[1],)
-        elif len(dim) == 3: #H,W,C
+        elif len(dim) == 3:  # H,W,C
             if (len(unfiltered_shape) > 3):
                 # keras uses the reverse notation from us
                 input_dims[idx] = (dim[2], dim[0], dim[1])
-            else: # keras provided fixed batch and sequence length, so the input was (batch, sequence, channel)
+            # keras provided fixed batch and sequence length, so the input was (batch, sequence, channel)
+            else:
                 input_dims[idx] = (dim[2],)
         else:
-            raise ValueError('Input' + input_names[idx] + 'has input shape of length' + str(len(dim)))
+            raise ValueError(
+                'Input' + input_names[idx] + 'has input shape of length' + str(len(dim)))
 
     # Retrieve output shapes from model
     if type(model.output_shape) is list:
@@ -270,7 +278,7 @@ def _convert(model,
     input_features = list(zip(input_names, input_types))
     output_features = list(zip(output_names, output_types))
 
-    builder = _NeuralNetworkBuilder(input_features, output_features, mode = mode)
+    builder = _NeuralNetworkBuilder(input_features, output_features, mode=mode)
 
     for iter, layer in enumerate(graph.layer_list):
         keras_layer = graph.keras_layer_map[layer]
@@ -295,52 +303,54 @@ def _convert(model,
         if isinstance(classes_in, _string_types):
             import os
             if not os.path.isfile(classes_in):
-                raise ValueError("Path to class labels (%s) does not exist." % classes_in)
+                raise ValueError(
+                    "Path to class labels (%s) does not exist." % classes_in)
             with open(classes_in, 'r') as f:
                 classes = f.read()
             classes = classes.splitlines()
-        elif type(classes_in) is list: # list[int or str]
+        elif type(classes_in) is list:  # list[int or str]
             classes = classes_in
         else:
-            raise ValueError('Class labels must be a list of integers / strings, or a file path')
+            raise ValueError(
+                'Class labels must be a list of integers / strings, or a file path')
 
         if predicted_feature_name is not None:
-            builder.set_class_labels(classes, predicted_feature_name = predicted_feature_name,
-                                     prediction_blob = predicted_probabilities_output)
+            builder.set_class_labels(classes, predicted_feature_name=predicted_feature_name,
+                                     prediction_blob=predicted_probabilities_output)
         else:
             builder.set_class_labels(classes)
 
     # Set pre-processing paramsters
-    builder.set_pre_processing_parameters(image_input_names = image_input_names, 
-                                          is_bgr = is_bgr, 
-                                          red_bias = red_bias, 
-                                          green_bias = green_bias, 
-                                          blue_bias = blue_bias, 
-                                          gray_bias = gray_bias, 
-                                          image_scale = image_scale)
+    builder.set_pre_processing_parameters(image_input_names=image_input_names,
+                                          is_bgr=is_bgr,
+                                          red_bias=red_bias,
+                                          green_bias=green_bias,
+                                          blue_bias=blue_bias,
+                                          gray_bias=gray_bias,
+                                          image_scale=image_scale)
 
     # Return the protobuf spec
     spec = builder.spec
     return spec
 
-def convertToSpec(model,
-                  input_names = None,
-                  output_names = None,
-                  image_input_names = None,
-                  is_bgr = False,
-                  red_bias = 0.0,
-                  green_bias = 0.0,
-                  blue_bias = 0.0,
-                  gray_bias = 0.0,
-                  image_scale = 1.0,
-                  class_labels = None,
-                  predicted_feature_name = None,
-                  model_precision = _MLMODEL_FULL_PRECISION,
-                  predicted_probabilities_output = '',
-                  add_custom_layers = False,
-                  custom_conversion_functions = None,
-                  custom_objects=None):
 
+def convertToSpec(model,
+                  input_names=None,
+                  output_names=None,
+                  image_input_names=None,
+                  is_bgr=False,
+                  red_bias=0.0,
+                  green_bias=0.0,
+                  blue_bias=0.0,
+                  gray_bias=0.0,
+                  image_scale=1.0,
+                  class_labels=None,
+                  predicted_feature_name=None,
+                  model_precision=_MLMODEL_FULL_PRECISION,
+                  predicted_probabilities_output='',
+                  add_custom_layers=False,
+                  custom_conversion_functions=None,
+                  custom_objects=None):
     """
     Convert a Keras model to Core ML protobuf specification (.mlmodel).
 
@@ -389,34 +399,34 @@ def convertToSpec(model,
         representation.
 
     red_bias: float | dict()
-        Bias value to be added to the red channel of the input image. 
+        Bias value to be added to the red channel of the input image.
         Defaults to 0.0
         Applicable only if image_input_names is specified.
-        To specify different values for each image input provide a dictionary with input names as keys.    
+        To specify different values for each image input provide a dictionary with input names as keys.
 
     blue_bias: float | dict()
         Bias value to be added to the blue channel of the input image.
         Defaults to 0.0
         Applicable only if image_input_names is specified.
-        To specify different values for each image input provide a dictionary with input names as keys.    
+        To specify different values for each image input provide a dictionary with input names as keys.
 
     green_bias: float | dict()
         Bias value to be added to the green channel of the input image.
         Defaults to 0.0
         Applicable only if image_input_names is specified.
-        To specify different values for each image input provide a dictionary with input names as keys.    
+        To specify different values for each image input provide a dictionary with input names as keys.
 
     gray_bias: float | dict()
         Bias value to be added to the input image (in grayscale). Defaults
         to 0.0
         Applicable only if image_input_names is specified.
-        To specify different values for each image input provide a dictionary with input names as keys.    
+        To specify different values for each image input provide a dictionary with input names as keys.
 
     image_scale: float | dict()
-        Value by which input images will be scaled before bias is added and 
+        Value by which input images will be scaled before bias is added and
         Core ML model makes a prediction. Defaults to 1.0.
         Applicable only if image_input_names is specified.
-        To specify different values for each image input provide a dictionary with input names as keys.    
+        To specify different values for each image input provide a dictionary with input names as keys.
 
     class_labels: list[int or str] | str
         Class labels (applies to classifiers only) that map the index of the
@@ -438,7 +448,7 @@ def convertToSpec(model,
         Name of the neural network output to be interpreted as the predicted
         probabilities of the resulting classes. Typically the output of a
         softmax function. Defaults to the first output blob.
-        
+
     add_custom_layers: bool
         If True, then unknown Keras layer types will be added to the model as
         'custom' layers, which must then be filled in as postprocessing.
@@ -506,41 +516,42 @@ def convertToSpec(model,
 
     """
     if model_precision not in _VALID_MLMODEL_PRECISION_TYPES:
-        raise RuntimeError('Model precision {} is not valid'.format(model_precision))
+        raise RuntimeError(
+            'Model precision {} is not valid'.format(model_precision))
 
     if _HAS_KERAS_TF:
         spec = _convert(model=model,
-                         input_names=input_names,
-                         output_names=output_names,
-                         image_input_names=image_input_names,
-                         is_bgr=is_bgr,
-                         red_bias=red_bias,
-                         green_bias=green_bias,
-                         blue_bias=blue_bias,
-                         gray_bias=gray_bias,
-                         image_scale=image_scale,
-                         class_labels=class_labels,
-                         predicted_feature_name=predicted_feature_name,
-                         predicted_probabilities_output=predicted_probabilities_output,
-                         custom_objects=custom_objects)
+                        input_names=input_names,
+                        output_names=output_names,
+                        image_input_names=image_input_names,
+                        is_bgr=is_bgr,
+                        red_bias=red_bias,
+                        green_bias=green_bias,
+                        blue_bias=blue_bias,
+                        gray_bias=gray_bias,
+                        image_scale=image_scale,
+                        class_labels=class_labels,
+                        predicted_feature_name=predicted_feature_name,
+                        predicted_probabilities_output=predicted_probabilities_output,
+                        custom_objects=custom_objects)
     elif _HAS_KERAS2_TF:
         from . import _keras2_converter
         spec = _keras2_converter._convert(model=model,
-                                           input_names=input_names,
-                                           output_names=output_names,
-                                           image_input_names=image_input_names,
-                                           is_bgr=is_bgr,
-                                           red_bias=red_bias,
-                                           green_bias=green_bias,
-                                           blue_bias=blue_bias,
-                                           gray_bias=gray_bias,
-                                           image_scale=image_scale,
-                                           class_labels=class_labels,
-                                           predicted_feature_name=predicted_feature_name,
-                                           predicted_probabilities_output=predicted_probabilities_output,
-                                           add_custom_layers=add_custom_layers,
-                                           custom_conversion_functions=custom_conversion_functions,
-                                           custom_objects=custom_objects)
+                                          input_names=input_names,
+                                          output_names=output_names,
+                                          image_input_names=image_input_names,
+                                          is_bgr=is_bgr,
+                                          red_bias=red_bias,
+                                          green_bias=green_bias,
+                                          blue_bias=blue_bias,
+                                          gray_bias=gray_bias,
+                                          image_scale=image_scale,
+                                          class_labels=class_labels,
+                                          predicted_feature_name=predicted_feature_name,
+                                          predicted_probabilities_output=predicted_probabilities_output,
+                                          add_custom_layers=add_custom_layers,
+                                          custom_conversion_functions=custom_conversion_functions,
+                                          custom_objects=custom_objects)
     else:
         raise RuntimeError(
             'Keras not found or unsupported version or backend found. keras conversion API is disabled.')
@@ -552,25 +563,25 @@ def convertToSpec(model,
 
 
 def convert(model,
-                  input_names = None,
-                  output_names = None,
-                  image_input_names = None,
-                  is_bgr = False,
-                  red_bias = 0.0,
-                  green_bias = 0.0,
-                  blue_bias = 0.0,
-                  gray_bias = 0.0,
-                  image_scale = 1.0,
-                  class_labels = None,
-                  predicted_feature_name = None,
-                  model_precision = _MLMODEL_FULL_PRECISION,
-                  predicted_probabilities_output = '',
-                  add_custom_layers = False,
-                  custom_conversion_functions = None):
-    
+            input_names=None,
+            output_names=None,
+            image_input_names=None,
+            is_bgr=False,
+            red_bias=0.0,
+            green_bias=0.0,
+            blue_bias=0.0,
+            gray_bias=0.0,
+            image_scale=1.0,
+            class_labels=None,
+            predicted_feature_name=None,
+            model_precision=_MLMODEL_FULL_PRECISION,
+            predicted_probabilities_output='',
+            add_custom_layers=False,
+            custom_conversion_functions=None,
+            custom_objects=None):
     """
     Convert a Keras model to Core ML protobuf specification (.mlmodel).
-        
+
     Parameters
     ----------
     model: Keras model object | str | (str, str)
@@ -728,22 +739,21 @@ def convert(model,
 
     """
     spec = convertToSpec(model,
-                      input_names,
-                      output_names,
-                      image_input_names,
-                      is_bgr,
-                      red_bias,
-                      green_bias,
-                      blue_bias,
-                      gray_bias,
-                      image_scale,
-                      class_labels,
-                      predicted_feature_name,
-                      model_precision,
-                      predicted_probabilities_output,
-                      add_custom_layers,
-                      custom_conversion_functions=custom_conversion_functions)
+                         input_names,
+                         output_names,
+                         image_input_names,
+                         is_bgr,
+                         red_bias,
+                         green_bias,
+                         blue_bias,
+                         gray_bias,
+                         image_scale,
+                         class_labels,
+                         predicted_feature_name,
+                         model_precision,
+                         predicted_probabilities_output,
+                         add_custom_layers,
+                         custom_objects=custom_objects,
+                         custom_conversion_functions=custom_conversion_functions)
 
     return _MLModel(spec)
-
-

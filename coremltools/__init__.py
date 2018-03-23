@@ -5,8 +5,8 @@
 
 """
 Core ML is an Apple framework which allows developers to simply and easily integrate machine
-learning (ML) models into apps running on Apple devices (including iOS, watchOS, macOS, and 
-tvOS). Core ML introduces a public file format (.mlmodel) for a broad set of ML methods 
+learning (ML) models into apps running on Apple devices (including iOS, watchOS, macOS, and
+tvOS). Core ML introduces a public file format (.mlmodel) for a broad set of ML methods
 including deep neural networks (both convolutional and recurrent), tree ensembles with boosting,
 and generalized linear models. Models in this format can be directly integrated into apps
 through Xcode.

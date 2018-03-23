@@ -6,6 +6,6 @@
 # expose directories as imports
 from . import libsvm
 from . import sklearn
-from . import xgboost
+#from . import xgboost
 from . import keras
 from . import caffe
